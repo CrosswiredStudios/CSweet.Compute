@@ -1,0 +1,50 @@
+name: Publish compute packages
+on:
+  push:
+    branches: [main]
+    paths: [Directory.Build.props]
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: compute-nuget-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Check release version
+        id: release
+        shell: pwsh
+        run: |
+          [xml]$props = Get-Content Directory.Build.props -Raw
+          $version = [string]$props.Project.PropertyGroup.Version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Expected MAJOR.MINOR.PATCH in Directory.Build.props' }
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$version") { throw 'Tag and package versions differ' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - run: dotnet test CSweet.Compute.slnx -c Release
+      - run: dotnet pack CSweet.Compute.slnx -c Release --no-build -o artifacts/packages
+      - uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ secrets.NUGET_USER }}
+      - name: Publish Contracts and Provider
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          foreach ($id in 'CSweet.Compute.Contracts', 'CSweet.Compute.Provider') {
+            dotnet nuget push "artifacts/packages/$id.$env:VERSION.nupkg" --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }

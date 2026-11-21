@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Shared C-Sweet compute provider verification, capacity, replay, and guest communication.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../CSweet.Compute.Contracts/CSweet.Compute.Contracts.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>C-Sweet compute specifications, wire messages, and signing formats.</Description>
+  </PropertyGroup>
+</Project>

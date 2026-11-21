@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CSweet.Compute.Contracts/CSweet.Compute.Contracts.csproj" />
+    <Project Path="src/CSweet.Compute.Provider/CSweet.Compute.Provider.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CSweet.Compute.Tests/CSweet.Compute.Tests.csproj" />
+  </Folder>
+</Solution>
