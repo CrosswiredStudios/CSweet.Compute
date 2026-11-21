@@ -3,6 +3,7 @@
     <Description>Shared C-Sweet compute provider verification, capacity, replay, and guest communication.</Description>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="CSweet.UnitTests" />
     <ProjectReference Include="../CSweet.Compute.Contracts/CSweet.Compute.Contracts.csproj" />
   </ItemGroup>
 </Project>

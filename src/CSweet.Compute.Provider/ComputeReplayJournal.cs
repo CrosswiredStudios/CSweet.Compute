@@ -1,3 +1,4 @@
+using System.Security.Principal;
 using System.Text.Json;
 using CSweet.Compute.Contracts;
 using CSweet.Domain.Compute;
@@ -22,6 +23,16 @@ public sealed partial class ComputeReplayJournal
 
     public ComputeReplayJournal(string directory, ComputeProviderEnrollment enrollment, ComputeProviderCapacity capacity, TimeProvider clock)
         : this(directory, enrollment, capacity, clock, WindowsComputeProtectedPaths.Verify) { }
+
+    /// <summary>Opens a protected journal whose state may also be owned by the named Windows service.</summary>
+    public static ComputeReplayJournal OpenForWindowsService(string directory, ComputeProviderEnrollment enrollment,
+        ComputeProviderCapacity capacity, TimeProvider clock, string serviceName)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+        var service = new NTAccount("NT SERVICE", serviceName);
+        var owner = (SecurityIdentifier)service.Translate(typeof(SecurityIdentifier));
+        return new ComputeReplayJournal(directory, enrollment, capacity, clock, path => WindowsComputeProtectedPaths.Verify(path, owner));
+    }
 
     // Tests exercise transaction mechanics in ordinary temporary directories; production uses
     // the public constructor's owner/ACL/link checks. Other platforms need their own protection.
