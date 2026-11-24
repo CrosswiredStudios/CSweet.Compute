@@ -15,7 +15,7 @@ public sealed class ComputeGuestReadinessTests
     [InlineData("wrong-version", false)]
     public async Task Framed_exchange_requires_fresh_matching_guest_liveness(string scenario, bool expected)
     {
-        var name = "csweet-guest-readiness-" + Guid.NewGuid().ToString("N");
+        var name = Guid.NewGuid().ToString("N");
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await using var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         await using var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
