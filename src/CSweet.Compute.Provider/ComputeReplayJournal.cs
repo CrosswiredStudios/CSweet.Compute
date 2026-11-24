@@ -22,7 +22,7 @@ public sealed partial class ComputeReplayJournal
     private const int MaximumBytes = 128 * 1024 * 1024;
 
     public ComputeReplayJournal(string directory, ComputeProviderEnrollment enrollment, ComputeProviderCapacity capacity, TimeProvider clock)
-        : this(directory, enrollment, capacity, clock, WindowsComputeProtectedPaths.Verify) { }
+        : this(directory, enrollment, capacity, clock, OperatingSystem.IsMacOS() ? MacComputeProtectedPaths.Verify : WindowsComputeProtectedPaths.Verify) { }
 
     /// <summary>Opens a protected journal whose state may also be owned by the named Windows service.</summary>
     public static ComputeReplayJournal OpenForWindowsService(string directory, ComputeProviderEnrollment enrollment,
@@ -348,7 +348,8 @@ public sealed partial class ComputeReplayJournal
 
     private static bool IsLockContention(IOException error) =>
         (error.HResult & 0xffff) is 32 or 33 ||
-        !OperatingSystem.IsWindows() && (error.HResult & 0xffff) == 11;
+        !OperatingSystem.IsWindows() && (error.HResult & 0xffff) == 11 ||
+        OperatingSystem.IsMacOS() && (error.HResult & 0xffff) == 35; // Darwin EWOULDBLOCK
 
     private async Task<JournalState> ReadAsync(CancellationToken token)
     {
