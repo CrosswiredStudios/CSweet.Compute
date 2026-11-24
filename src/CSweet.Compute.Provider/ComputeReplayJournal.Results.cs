@@ -54,6 +54,9 @@ public sealed partial class ComputeReplayJournal
         var result = new ComputeProviderResult(claim.OperationId, claim.EnvironmentId, claim.OrganizationId,
             claim.InstallationId, claim.ProviderId, claim.NodeId, claim.Generation, claim.Action, claim.SpecificationDigest,
             sequence, environment.ResourceId, observation.State, observation.TeardownConfirmed, now, now.AddMinutes(2), observation.FailureCode, observation.Workload);
+        if (observation.State == ComputeLifecycleState.Stopped) environment.Stopped = true;
+        else if (observation.State is ComputeLifecycleState.Ready or ComputeLifecycleState.Busy or ComputeLifecycleState.Bootstrapping)
+            environment.Stopped = false;
         if (observation.TeardownConfirmed) environment.TeardownConfirmed = true;
         operation.LastResultSequence = sequence;
         state.ResultOutbox[claim.OperationId] = new(result, ComputeProtocol.Digest(JsonSerializer.Serialize(result, ComputeProtocol.Json)));

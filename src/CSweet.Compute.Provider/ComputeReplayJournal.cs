@@ -45,10 +45,33 @@ public sealed partial class ComputeReplayJournal
         verifyProtectedPath(this.directory);
     }
 
-    public async Task InitializeAsync(CancellationToken token)
+    public Task InitializeAsync(CancellationToken token) => InitializeAsync(null, token);
+
+    /// <summary>Recovers running capacity from pre-upgrade stop records using trusted, exact-instance inventory.</summary>
+    public async Task InitializeAsync(Func<Guid, string, CancellationToken, Task<bool>>? confirmStopped, CancellationToken token)
     {
         await using var held = await LockAsync(token);
-        if (File.Exists(StatePath)) { await ReadAsync(token); return; }
+        if (File.Exists(StatePath))
+        {
+            var state = await ReadAsync(token);
+            if (confirmStopped == null) return;
+            var changed = false;
+            foreach (var (id, environment) in state.Environments)
+            {
+                if (environment.Stopped.HasValue || environment.TeardownConfirmed || environment.Reservation == null ||
+                    environment.ResourceId is not { } resource ||
+                    !environment.Operations.TryGetValue(environment.CurrentOperationId, out var latest) ||
+                    latest.Action != InfrastructureActions.Stop || !latest.ExecutionClaimed) continue;
+                // Older journal versions discarded acknowledged observations. Only current physical proof frees capacity.
+                if (await confirmStopped(id, resource, token))
+                {
+                    environment.Stopped = true;
+                    changed = true;
+                }
+            }
+            if (changed) await WriteAsync(state, token);
+            return;
+        }
         // A missing state file in a previously initialized directory is not a fresh install.
         if (Directory.EnumerateFileSystemEntries(directory).Any(x => Path.GetFileName(x) != "journal.lock"))
             throw new InvalidDataException("Compute history is missing; initialization cannot discard prior state.");
@@ -134,7 +157,7 @@ public sealed partial class ComputeReplayJournal
         {
             state.Environments.Add(claim.EnvironmentId, environment = new()
             {
-                InstallationId = claim.InstallationId, SpecificationDigest = claim.SpecificationDigest
+                InstallationId = claim.InstallationId, SpecificationDigest = claim.SpecificationDigest, Stopped = false
             });
         }
         if (environment.InstallationId != claim.InstallationId || environment.SpecificationDigest != claim.SpecificationDigest ||
@@ -160,8 +183,13 @@ public sealed partial class ComputeReplayJournal
                     throw new UnauthorizedAccessException("A physical reservation already exists; reconcile it before recreation.");
                 Reserve(state, environment, dispatch);
             }
-            else if (claim.Action is InfrastructureActions.Start or InfrastructureActions.Restart && (environment.Reservation is null || environment.ResourceId is null))
-                throw new UnauthorizedAccessException("Activation requires protected capacity and resource identity history.");
+            else if (claim.Action is InfrastructureActions.Start or InfrastructureActions.Restart)
+            {
+                if (environment.Reservation is null || environment.ResourceId is null)
+                    throw new UnauthorizedAccessException("Activation requires protected capacity and resource identity history.");
+                RequireRoom(state, environment, environment.Reservation.Resources);
+                environment.Stopped = false;
+            }
             operation.ExecutionClaimed = true; operation.TemplateDigest = claim.TemplateDigest;
             decision = ComputeJournalDecision.Execute;
         }
@@ -268,10 +296,14 @@ public sealed partial class ComputeReplayJournal
             await WriteAsync(state, CancellationToken.None);
             throw;
         }
-        if (outcome.Result) lease.LastConfirmedAt = clock.GetUtcNow();
+        if (outcome.Result)
+        {
+            lease.LastConfirmedAt = clock.GetUtcNow();
+            if (action == InfrastructureActions.Stop) environment.Stopped = true;
+        }
         StageMaintenance(state, environmentId, environment, action, ComputeMaintenancePhase.Observed, outcome.Result, null);
         // A failed result write leaves the original request pending; it is not proof that cleanup failed.
-        // Confirmation records physical observation only: no capacity or persistent storage is released.
+        // Retained disks stay reserved until teardown evidence arrives.
         await WriteAsync(state, CancellationToken.None);
         return true;
     }
@@ -309,21 +341,26 @@ public sealed partial class ComputeReplayJournal
 
     private void Reserve(JournalState state, EnvironmentHistory environment, VerifiedComputeDispatch dispatch)
     {
-        var reservations = state.Environments.Values.Where(x => x.Reservation is not null && !x.TeardownConfirmed).Select(x => x.Reservation!).ToArray();
         var requested = dispatch.Specification.Resources;
-        // Decimal accumulation cannot overflow at the journal's bounded record count, even with long resource units.
-        if (!requested.Fits(capacity.Resources) || reservations.Length >= capacity.MaximumEnvironments ||
-            reservations.Sum(x => (decimal)x.Resources.CpuCount) + requested.CpuCount > capacity.Resources.CpuCount ||
-            reservations.Sum(x => (decimal)x.Resources.MemoryMiB) + requested.MemoryMiB > capacity.Resources.MemoryMiB ||
-            reservations.Sum(x => (decimal)x.Resources.DiskMiB) + requested.DiskMiB > capacity.Resources.DiskMiB ||
-            reservations.Sum(x => (decimal)x.Resources.GpuCount) + requested.GpuCount > capacity.Resources.GpuCount)
-            throw new InvalidOperationException("The provider has insufficient unreserved capacity.");
+        RequireRoom(state, environment, requested);
         environment.Reservation = new()
         {
             Resources = requested, Persistence = dispatch.Specification.Persistence,
             LeaseExpiresAt = dispatch.Authorization.EnvironmentLeaseExpiresAt,
             ProvisionOperationId = dispatch.Authorization.OperationId, ProvisionGrants = dispatch.Authorization.Grants.ToArray()
         };
+    }
+
+    private void RequireRoom(JournalState state, EnvironmentHistory environment, ComputeResources requested)
+    {
+        var held = state.Environments.Values.Where(x => x != environment && x.Reservation != null && !x.TeardownConfirmed).ToArray();
+        var running = held.Where(x => x.Stopped != true).Select(x => x.Reservation!.Resources).ToArray();
+        if (!requested.Fits(capacity.Resources) || running.Length >= capacity.MaximumEnvironments ||
+            running.Sum(x => (decimal)x.CpuCount) + requested.CpuCount > capacity.Resources.CpuCount ||
+            running.Sum(x => (decimal)x.MemoryMiB) + requested.MemoryMiB > capacity.Resources.MemoryMiB ||
+            running.Sum(x => (decimal)x.GpuCount) + requested.GpuCount > capacity.Resources.GpuCount ||
+            held.Sum(x => (decimal)x.Reservation!.Resources.DiskMiB) + requested.DiskMiB > capacity.Resources.DiskMiB)
+            throw new InvalidOperationException("The provider has insufficient unreserved capacity.");
     }
 
     private static bool ValidResourceId(string value) => value.Length is > 0 and <= 256 && !value.Any(char.IsControl);
@@ -465,6 +502,7 @@ public sealed partial class ComputeReplayJournal
         public Guid CurrentOperationId { get; set; }
         public bool DestroyRequested { get; set; }
         public bool TeardownConfirmed { get; set; }
+        public bool? Stopped { get; set; }
         public Dictionary<Guid, OperationHistory> Operations { get; set; } = [];
         public ReservationHistory? Reservation { get; set; }
         public string? ResourceId { get; set; }
